@@ -3604,6 +3604,15 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
                 if (payload) {
                   this.emit("garage door status", message.channel, payload.door_id, payload.type);
                 }
+              } else if (json.cmd === CommandType.CMD_STORAGE_INFO_HB3) {
+                const payload = json.payload as StorageInfoHB3;
+                rootP2PLogger.debug(
+                  `Handle DATA ${P2PDataType[message.dataType]} - CMD_NOTIFY_PAYLOAD StorageInfo HB3 update`,
+                  { stationSN: this.rawStation.station_sn, body: payload?.body }
+                );
+                if (payload) {
+                  this.emit("storage info hb3", message.channel, payload.body);
+                }
               } else if (json.cmd === 6246) {
                 const payload = json.payload as { num?: number };
                 rootP2PLogger.debug(
