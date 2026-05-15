@@ -791,6 +791,9 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
                 this.onStorageInfoHb3(station, channel, storageInfo)
               );
               station.on("hub notify update", (station: Station) => this.onHubNotifyUpdate(station));
+              station.p2pSession.on("push notification", (message: PushMessage) =>
+                this.onPushMessage(message)
+              );
               this.addStation(station);
               station.initialize();
             } catch (err) {
