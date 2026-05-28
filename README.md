@@ -111,6 +111,30 @@ Instructions aimed at maintainers for deploying a new version: [Deployment](docs
 
 ## Changelog
 
+### 4.0.0 (2026-05-28)
+
+* Fix: Add missing GenericTypeProperty labels for 5 device types by @lenoxys in https://github.com/bropat/eufy-security-client/pull/828
+* Feature: make P2P stream timeouts configurable by @lenoxys in https://github.com/bropat/eufy-security-client/pull/831
+* Fix: add missing rtspStreamUrl property to SoloCam E42 metadata by @lenoxys in https://github.com/bropat/eufy-security-client/pull/832
+* Fix: skip CMD_DOORBELL_SET_PAYLOAD for E340 on MiniBase Chime by @lenoxys in https://github.com/bropat/eufy-security-client/pull/834
+* Fix: E340 talkback @lenoxys in https://github.com/bropat/eufy-security-client/pull/837
+* Feature: Add fully notify when HB notify by @max246 in https://github.com/bropat/eufy-security-client/pull/838
+* Fix: auto-accept invitations by @lenoxys in https://github.com/bropat/eufy-security-client/pull/839
+* Fix: use correct motion detection property for SOLO_CAMERA_E30 (T8171) by @lenoxys in https://github.com/bropat/eufy-security-client/pull/840
+* Feature: add sendHouseInvite method by @mabahamo in https://github.com/bropat/eufy-security-client/pull/845
+* Feature: Add E30 (T8417) P2P livestream support by @ovikiss in https://github.com/bropat/eufy-security-client/pull/847
+* Feature: normalize multi-RDB ADTS frames in P2P audio stream by @lenoxys in https://github.com/bropat/eufy-security-client/pull/852
+* Feature: add NVR S4 Max (T8N00, type 300) support by @lenoxys in https://github.com/bropat/eufy-security-client/pull/854
+* Feature: add PoE Bullet-PTZ Cam S4 (T8E00, type 301) support by @lenoxys in https://github.com/bropat/eufy-security-client/pull/855
+* Fix: register LOCK_85V0 (T85V0) in DeviceProperties and DeviceCommands maps by @lenoxys in https://github.com/bropat/eufy-security-client/pull/858
+* Feature: basic E30 T8417 support by @max246 in https://github.com/bropat/eufy-security-client/pull/865
+* Fix: outer enableDevice for outdoor PT cams through CMD_SET_PAYLOAD by @max246 in https://github.com/bropat/eufy-security-client/pull/873
+* Fix: read enabled state for outdoor PT cams from the wrapped privacy-mode key by @max246 in https://github.com/bropat/eufy-security-client/pull/874
+* Feature: add FamiLock E34 (T85P0, type 209) support by @max246 in https://github.com/bropat/eufy-security-client/pull/876
+* Fix: Restore CMD_STORAGE_INFO_HB3 notify handler removed by #847 merge by @max246 in https://github.com/bropat/eufy-security-client/pull/878
+* Feature: upgrade to node 24 by @max246 in https://github.com/bropat/eufy-security-client/pull/897
+
+
 ### 3.8.0 (2026-03-01)
 
 * Feature: Add support for Smart Lock E20 (T85V0) by @worldjoe/@max246 in https://github.com/bropat/eufy-security-client/pull/803
