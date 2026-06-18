@@ -124,7 +124,7 @@ import {
 import { DskKeyResponse, ResultResponse, StationListResponse } from "../http/models";
 import { HTTPApi } from "../http/api";
 import { Device } from "../http/device";
-import { ParsePayload, decodeImage } from "../http/utils";
+import { ParsePayload, decodeImageAuto } from "../http/utils";
 import { TalkbackStream } from "./talkback";
 import { LivestreamError, TalkbackError, ensureError } from "../error";
 import { SmartSafeEvent } from "../push/types";
@@ -3776,11 +3776,17 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
               message: str,
             });
             const image = parseJSON(str, rootP2PLogger) as CmdDatabaseImageResponse;
-            this.emit(
-              "image download",
-              image.file,
-              decodeImage(this.rawStation.p2p_did, Buffer.from(image.content, "base64"))
-            );
+            decodeImageAuto(this.rawStation.p2p_did, Buffer.from(image.content, "base64"))
+              .then((decoded) => {
+                this.emit("image download", image.file, decoded);
+              })
+              .catch((err) => {
+                const error = ensureError(err);
+                rootP2PLogger.error(`Handle DATA ${P2PDataType[message.dataType]} - CMD_DATABASE_IMAGE - Decode error`, {
+                  error: getError(error),
+                  stationSN: this.rawStation.station_sn,
+                });
+              });
           } catch (err) {
             const error = ensureError(err);
             rootP2PLogger.error(`Handle DATA ${P2PDataType[message.dataType]} - CMD_DATABASE_IMAGE - Error`, {

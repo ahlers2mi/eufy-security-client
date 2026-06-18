@@ -30,7 +30,7 @@ import {
   EufyCamC35DetectionTypes,
 } from "./types";
 import { HTTPApi } from "./api";
-import { spliceV2Image, V2_PREFIX } from "./decodeImageV2";
+import { spliceV2Image, decodeV2ImageAuto, V2_PREFIX } from "./decodeImageV2";
 import { ensureError } from "../error";
 import { ImageBaseCodeError } from "./error";
 import { LockPushEvent } from "./../push/types";
@@ -736,6 +736,34 @@ export const decodeImage = function (p2pDid: string, data: Buffer): Buffer {
     }
   }
   return data;
+};
+
+/**
+ * Async counterpart of {@link decodeImage} for `v2_eufysecurity:` thumbnails.
+ *
+ * Unlike the synchronous {@link decodeImage} — which can only splice the v2 blob
+ * at a FIXED 288x176 4:2:0 geometry and therefore shears / colour-corrupts every
+ * image of a different size or subsampling (e.g. 4:4:4 snapshots) — this path
+ * auto-detects the real width / height / chroma-subsampling via
+ * {@link decodeV2ImageAuto} (optional `jpeg-js` dependency) and reconstructs a
+ * correctly proportioned JPEG. This also lets `image-type` recognise the result
+ * as `jpg` instead of producing an `undefined`/`unknown` file extension.
+ *
+ * Falls back to the synchronous {@link decodeImage} when the blob is not a v2
+ * thumbnail, when `jpeg-js` is unavailable, or when auto-detection fails.
+ */
+export const decodeImageAuto = async function (p2pDid: string, data: Buffer): Promise<Buffer> {
+  if (data.length >= V2_PREFIX.length && data.subarray(0, V2_PREFIX.length).toString("latin1") === V2_PREFIX) {
+    try {
+      const decoded = await decodeV2ImageAuto(data);
+      if (decoded !== null) {
+        return decoded.jpeg;
+      }
+    } catch {
+      // fall through to the synchronous fixed-geometry best effort
+    }
+  }
+  return decodeImage(p2pDid, data);
 };
 
 export const getImagePath = function (path: string): string {
