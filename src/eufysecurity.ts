@@ -386,36 +386,36 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
 
     this.pushService = await PushNotificationService.initialize();
     this.pushService.on("connect", async (token: string) => {
-        // Register the SAME FCM token on BOTH backends, INDEPENDENTLY. A migrated account is rejected
-        // by the legacy endpoint; a non-migrated one has no mega session. Whichever backend accepts the
-        // token delivers events — so one failing must never starve the other, and push counts as
-        // established if EITHER side accepted it.
-        let legacyOk = false;
-        try {
-            legacyOk = await this.api.registerPushToken(token);
-            legacyOk = legacyOk && (await this.api.checkPushToken());
-        } catch (err) {
-            rootMainLogger.warn("Legacy push token registration failed (v6 may still deliver)", {
-                error: getError(ensureError(err)),
-            });
-        }
-        this.pushCloudRegistered = legacyOk;
-        this.pushCloudChecked = legacyOk;
+      // Register the SAME FCM token on BOTH backends, INDEPENDENTLY. A migrated account is rejected
+      // by the legacy endpoint; a non-migrated one has no mega session. Whichever backend accepts the
+      // token delivers events — so one failing must never starve the other, and push counts as
+      // established if EITHER side accepted it.
+      let legacyOk = false;
+      try {
+        legacyOk = await this.api.registerPushToken(token);
+        legacyOk = legacyOk && (await this.api.checkPushToken());
+      } catch (err) {
+        rootMainLogger.warn("Legacy push token registration failed (v6 may still deliver)", {
+          error: getError(ensureError(err)),
+        });
+      }
+      this.pushCloudRegistered = legacyOk;
+      this.pushCloudChecked = legacyOk;
 
-        // Adjust this call to match your build: inline it's this.registerMegaPushToken(token);
-        // after the refactor it's likely this.megaTransition.registerMegaPushToken(token).
-        const megaOk = await this.megaTransition.registerMegaPushToken(token); // must return boolean, best-effort, never throws
+      // Adjust this call to match your build: inline it's this.registerMegaPushToken(token);
+      // after the refactor it's likely this.megaTransition.registerMegaPushToken(token).
+      const megaOk = await this.megaTransition.registerMegaPushToken(token); // must return boolean, best-effort, never throws
 
-        if (legacyOk || megaOk) {
-            rootMainLogger.info("Push notification connection successfully established", {
-                legacy: legacyOk,
-                eufyMega: megaOk,
-            });
-            this.emit("push connect");
-        } else {
-            rootMainLogger.info("Push notification connection closed");
-            this.emit("push close");
-        }
+      if (legacyOk || megaOk) {
+        rootMainLogger.info("Push notification connection successfully established", {
+          legacy: legacyOk,
+          eufyMega: megaOk,
+        });
+        this.emit("push connect");
+      } else {
+        rootMainLogger.info("Push notification connection closed");
+        this.emit("push close");
+      }
     });
     this.pushService.on("credential", (credentials: Credentials) => {
       this.savePushCredentials(credentials);
