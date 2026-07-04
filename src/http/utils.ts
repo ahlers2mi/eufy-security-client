@@ -30,7 +30,7 @@ import {
   EufyCamC35DetectionTypes,
 } from "./types";
 import { HTTPApi } from "./api";
-import { spliceV2Image, decodeV2ImageAuto, V2_PREFIX } from "./decodeImageV2";
+import { decodeV2ImageAuto, spliceV2Image, V2_PREFIX } from "./decodeImageV2";
 import { ensureError } from "../error";
 import { ImageBaseCodeError } from "./error";
 import { LockPushEvent } from "./../push/types";
@@ -708,15 +708,16 @@ export const decodeImage = function (p2pDid: string, data: Buffer): Buffer {
     // quantization tables + dimensions; the scan data is plaintext standard JPEG.
     //
     // NOTE / LIMITATION: this synchronous path reconstructs with a FIXED geometry of
-    // 288x176 4:2:0 — the standard event-thumbnail size, which covers the common
-    // push-notification image. Images of OTHER sizes (e.g. 552x408, 1272x728, 4:4:4
-    // snapshots) will be SHEARED here, because the true dimensions can only be
-    // recovered by trial decoding, which is async and not possible in this sync API.
+    // 288x176 4:2:0 — the standard push-notification thumbnail size (validated against
+    // the app's own decoded heap JPEG, 2026-06-10). Images of OTHER sizes (e.g. the
+    // 256x144 / 640x360 frames also seen in RAM, or 4:4:4 snapshots) are SHEARED here,
+    // because their true dimensions can only be recovered by trial decoding (async).
     //
-    // TODO: cover all sizes — add an async decode path (decodeV2ImageAuto() in
-    // decodeImageV2.ts already does width/height/subsampling auto-detection via the
-    // optional jpeg-js dep) and have the callers in api.ts (getImage) and
-    // p2p/session.ts await it, OR pass the real dimensions in from event metadata.
+    // Prefer the async {@link decodeImageAsync} (used by api.ts getImage, the path
+    // that actually receives v2 blobs) — it auto-detects width/height/subsampling via
+    // decodeV2ImageAuto() and handles every size. This sync splice is the fallback for
+    // sync callers (p2p/session.ts, which only ever receives plain JPEGs) and for when
+    // the optional jpeg-js dep is absent.
     if (data.subarray(0, V2_PREFIX.length).toString("latin1") === V2_PREFIX) {
       const spliced = spliceV2Image(data, 288, 176, "4:2:0");
       return spliced ?? data;
@@ -739,28 +740,21 @@ export const decodeImage = function (p2pDid: string, data: Buffer): Buffer {
 };
 
 /**
- * Async counterpart of {@link decodeImage} for `v2_eufysecurity:` thumbnails.
- *
- * Unlike the synchronous {@link decodeImage} — which can only splice the v2 blob
- * at a FIXED 288x176 4:2:0 geometry and therefore shears / colour-corrupts every
- * image of a different size or subsampling (e.g. 4:4:4 snapshots) — this path
- * auto-detects the real width / height / chroma-subsampling via
- * {@link decodeV2ImageAuto} (optional `jpeg-js` dependency) and reconstructs a
- * correctly proportioned JPEG. This also lets `image-type` recognise the result
- * as `jpg` instead of producing an `undefined`/`unknown` file extension.
- *
- * Falls back to the synchronous {@link decodeImage} when the blob is not a v2
- * thumbnail, when `jpeg-js` is unavailable, or when auto-detection fails.
+ * Async variant of {@link decodeImage}. For v6 `v2_eufysecurity:` thumbnails it
+ * recovers the EXACT geometry (width / height / chroma subsampling) by trial
+ * decoding ({@link decodeV2ImageAuto}, via the optional jpeg-js dependency)
+ * instead of assuming a fixed size, so thumbnails of any resolution decode
+ * without shearing. Falls back to the synchronous fixed-geometry splice when
+ * auto-detection is unavailable (jpeg-js absent) or fails. All non-v2 inputs are
+ * delegated unchanged to the synchronous {@link decodeImage}.
  */
-export const decodeImageAuto = async function (p2pDid: string, data: Buffer): Promise<Buffer> {
+export const decodeImageAsync = async function (p2pDid: string, data: Buffer): Promise<Buffer> {
   if (data.length >= V2_PREFIX.length && data.subarray(0, V2_PREFIX.length).toString("latin1") === V2_PREFIX) {
     try {
-      const decoded = await decodeV2ImageAuto(data);
-      if (decoded !== null) {
-        return decoded.jpeg;
-      }
+      const auto = await decodeV2ImageAuto(data);
+      if (auto) return auto.jpeg;
     } catch {
-      // fall through to the synchronous fixed-geometry best effort
+      // fall through to the synchronous fixed-geometry splice below
     }
   }
   return decodeImage(p2pDid, data);
