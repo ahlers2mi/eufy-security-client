@@ -7,6 +7,7 @@ import EventEmitter from "events";
 
 import { EufySecurityEvents, EufySecurityConfig, EufySecurityPersistentData } from "./interfaces";
 import { HTTPApi } from "./http/api";
+import { MegaTransition, MegaTransitionHost } from "./http/megaTransition";
 import {
   Devices,
   FullDevices,
@@ -33,6 +34,7 @@ import {
   NotificationSwitchMode,
   NotificationType,
   PropertyName,
+  ResponseErrorCode,
   SoloCameraDetectionTypes,
   T8170DetectionTypes,
   UserPasswordType,
@@ -128,6 +130,8 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
   private config: EufySecurityConfig;
 
   private api!: HTTPApi;
+  /** All v6 ("eufy_mega") behaviour — transport, login, push, connect sequencing — is isolated here. */
+  private megaTransition!: MegaTransition;
 
   private houses: Houses = {};
   private stations: Stations = {};
@@ -328,12 +332,12 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
       this.persistentData.httpApi = undefined;
     }
 
-    this.api = await HTTPApi.initialize(
-      this.config.country,
-      this.config.username,
-      this.config.password,
-      this.persistentData.httpApi
-    );
+    // All v6 ("eufy_mega") behaviour is isolated in MegaTransition (login, push, connect
+    // sequencing). It talks back to us only through this narrow host surface and builds the live
+    // transport (the legacy HTTPApi today). Removing the transition layer reverts everything to the
+    // upstream legacy behaviour.
+    this.megaTransition = new MegaTransition(this.megaTransitionHost());
+    this.api = await this.megaTransition.createTransport(this.persistentData.httpApi);
     this.api.setLanguage(this.config.language);
     this.api.setPhoneModel(this.config.trustedDeviceName);
 
@@ -341,10 +345,19 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     this.api.on("hubs", (hubs: Hubs) => this.handleHubs(hubs));
     this.api.on("devices", (devices: FullDevices) => this.handleDevices(devices));
     this.api.on("close", () => this.onAPIClose());
-    this.api.on("connect", () => this.onAPIConnect());
-    this.api.on("captcha request", (id: string, captcha: string) => this.onCaptchaRequest(id, captcha));
+    // NOTE: the legacy login emitting "connect" no longer drives the app-ready signal directly —
+    // connect() sequences mega + legacy and calls onAPIConnect() once at the very end (see below).
+    this.api.on("connect", () => rootMainLogger.debug("Legacy API connected"));
+    // The legacy login records itself as the pending challenge so the next code/captcha is routed to it.
+    this.api.on("captcha request", (id: string, captcha: string) => {
+      this.megaTransition.recordLegacyChallenge();
+      this.onCaptchaRequest(id, captcha);
+    });
     this.api.on("auth token invalidated", () => this.onAuthTokenInvalidated());
-    this.api.on("tfa request", () => this.onTfaRequest());
+    this.api.on("tfa request", () => {
+      this.megaTransition.recordLegacyChallenge();
+      this.onTfaRequest();
+    });
     this.api.on("connection error", (error: Error) => this.onAPIConnectionError(error));
 
     if (
@@ -373,12 +386,31 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
 
     this.pushService = await PushNotificationService.initialize();
     this.pushService.on("connect", async (token: string) => {
-      this.pushCloudRegistered = await this.api.registerPushToken(token);
-      this.pushCloudChecked = await this.api.checkPushToken();
-      //TODO: Retry if failed with max retry to not lock account
+      // Register the SAME FCM token on BOTH backends, INDEPENDENTLY. A migrated account is rejected
+      // by the legacy endpoint; a non-migrated one has no mega session. Whichever backend accepts the
+      // token delivers events — so one failing must never starve the other, and push counts as
+      // established if EITHER side accepted it.
+      let legacyOk = false;
+      try {
+        legacyOk = await this.api.registerPushToken(token);
+        legacyOk = legacyOk && (await this.api.checkPushToken());
+      } catch (err) {
+        rootMainLogger.warn("Legacy push token registration failed (v6 may still deliver)", {
+          error: getError(ensureError(err)),
+        });
+      }
+      this.pushCloudRegistered = legacyOk;
+      this.pushCloudChecked = legacyOk;
 
-      if (this.pushCloudRegistered && this.pushCloudChecked) {
-        rootMainLogger.info("Push notification connection successfully established");
+      // Adjust this call to match your build: inline it's this.registerMegaPushToken(token);
+      // after the refactor it's likely this.megaTransition.registerMegaPushToken(token).
+      const megaOk = await this.megaTransition.registerMegaPushToken(token); // must return boolean, best-effort, never throws
+
+      if (legacyOk || megaOk) {
+        rootMainLogger.info("Push notification connection successfully established", {
+          legacy: legacyOk,
+          eufyMega: megaOk,
+        });
         this.emit("push connect");
       } else {
         rootMainLogger.info("Push notification connection closed");
@@ -791,6 +823,7 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
                 this.onStorageInfoHb3(station, channel, storageInfo)
               );
               station.on("hub notify update", (station: Station) => this.onHubNotifyUpdate(station));
+              station.on("push notification", (_station: Station, message: PushMessage) => this.onPushMessage(message));
               this.addStation(station);
               station.initialize();
             } catch (err) {
@@ -1158,7 +1191,21 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
     this.pushService.open();
   }
 
+  /**
+   * Entry point for the consumer. The whole login sequence (v6-first, legacy best-effort, single
+   * app-ready signal at the end, serialisation, 2FA/captcha routing) lives in {@link MegaTransition};
+   * here we just delegate. Removing the transition layer makes this equivalent to {@link legacyConnect}.
+   */
   public async connect(options?: LoginOptions): Promise<void> {
+    return this.megaTransition.connect(options);
+  }
+
+  /**
+   * The original (upstream) login: authenticate the legacy backend and trust the device on first
+   * 2FA. Kept verbatim and driven by {@link MegaTransition} as the best-effort second step; it no
+   * longer signals the app directly (that is now done once, at the end of the sequence).
+   */
+  private async legacyConnect(options?: LoginOptions): Promise<void> {
     await this.api
       .login(options)
       .then(async () => {
@@ -1177,6 +1224,26 @@ export class EufySecurity extends TypedEmitter<EufySecurityEvents> {
         const error = ensureError(err);
         rootMainLogger.error("Connect Error", { error: getError(error), options: options });
       });
+  }
+
+  /** The narrow surface the v6 transition layer uses to talk back to us, as a closure object. */
+  private megaTransitionHost(): MegaTransitionHost {
+    // `api` is a getter so the transition layer always sees the live transport, which we assign
+    // right after building the host (and could swap later); the other members are stable.
+    const eufy = this;
+    return {
+      config: this.config,
+      persistentData: this.persistentData,
+      get api() {
+        return eufy.api;
+      },
+      writePersistentData: () => this.writePersistentData(),
+      emitTfaRequest: () => this.onTfaRequest(),
+      emitCaptchaRequest: (id: string, captcha: string) => this.onCaptchaRequest(id, captcha),
+      legacyConnect: (options?: LoginOptions) => this.legacyConnect(options),
+      onAPIConnect: () => this.onAPIConnect(),
+      onConnectionError: (error: Error) => this.onAPIConnectionError(error),
+    };
   }
 
   public getPushPersistentIds(): string[] {
