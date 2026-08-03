@@ -671,27 +671,49 @@ export class P2PClientProtocol extends TypedEmitter<P2PClientProtocolEvents> {
     if (!this.connected && !this.connecting && this.rawStation.p2p_did !== undefined) {
       this.connecting = true;
       this.terminating = false;
-      await this.renewDSKKey();
-      if (!this.binded)
-        this.socket.bind(this.listeningPort, () => {
-          this.binded = true;
-          try {
-            this.socket.setRecvBufferSize(this.UDP_RECVBUFFERSIZE_BYTES);
-            this.socket.setBroadcast(true);
-          } catch (err) {
-            const error = ensureError(err);
-            rootP2PLogger.error(`connect - Error`, {
-              error: getError(error),
-              stationSN: this.rawStation.station_sn,
-              host: host,
-              currentRecBufferSize: this.socket.getRecvBufferSize(),
-              recBufferRequestedSize: this.UDP_RECVBUFFERSIZE_BYTES,
-            });
-          }
+      // Arm the connection timeout right away. The lookup timeout (MAX_LOOKUP_TIMEOUT)
+      // only protects the phase *after* lookup() is reached — it does NOT cover the
+      // setup steps below (renewDSKKey()'s HTTP call and socket.bind()). If one of
+      // those throws, hangs or never invokes its callback (e.g. while eufy is changing
+      // the cloud API, or after a socket error left the port in a bad state), lookup()
+      // is never reached, nothing ever resets `connecting`, and the guard above then
+      // silently swallows every future reconnect attempt until a full restart. Arming
+      // the timeout here guarantees any stalled/failed attempt is resolved via
+      // _disconnected() -> "timeout" -> Station.scheduleReconnect() (with its backoff).
+      this._startConnectTimeout();
+      try {
+        await this.renewDSKKey();
+        if (!this.binded)
+          this.socket.bind(this.listeningPort, () => {
+            this.binded = true;
+            try {
+              this.socket.setRecvBufferSize(this.UDP_RECVBUFFERSIZE_BYTES);
+              this.socket.setBroadcast(true);
+            } catch (err) {
+              const error = ensureError(err);
+              rootP2PLogger.error(`connect - Error`, {
+                error: getError(error),
+                stationSN: this.rawStation.station_sn,
+                host: host,
+                currentRecBufferSize: this.socket.getRecvBufferSize(),
+                recBufferRequestedSize: this.UDP_RECVBUFFERSIZE_BYTES,
+              });
+            }
+            this.lookup(host);
+          });
+        else {
           this.lookup(host);
+        }
+      } catch (err) {
+        // Never let a failed setup leave `connecting` stuck true — route it through
+        // the normal disconnect path so the station reschedules the reconnect.
+        const error = ensureError(err);
+        rootP2PLogger.error(`connect - Error during connection setup, triggering reconnect`, {
+          error: getError(error),
+          stationSN: this.rawStation.station_sn,
+          host: host,
         });
-      else {
-        this.lookup(host);
+        this._disconnected();
       }
     }
   }
