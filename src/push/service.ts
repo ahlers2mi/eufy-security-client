@@ -868,10 +868,15 @@ export class PushNotificationService extends TypedEmitter<PushNotificationServic
 
   public setPersistentIds(persistentIds: string[]): void {
     this.persistentIds = persistentIds;
+    if (this.pushClient) this.pushClient.setPersistentIds(this.persistentIds);
   }
 
   public getPersistentIds(): string[] {
-    return this.persistentIds;
+    // Ask the client, not our own copy: it is the one collecting the ids of the
+    // messages that actually arrived. Returning the list we were seeded with at
+    // startup would persist a stale set, and FCM would redeliver everything
+    // received since then on the next connect.
+    return this.pushClient !== undefined ? this.pushClient.getPersistentIds() : this.persistentIds;
   }
 
   private async _open(renew = false, forceNew = false): Promise<void> {
