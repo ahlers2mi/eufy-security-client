@@ -19,6 +19,10 @@ export class PushClient extends TypedEmitter<PushClientEvents> {
   private readonly MCS_VERSION = 41;
 
   private readonly HEARTBEAT_INTERVAL = 5 * 60 * 1000;
+  // Upper bound for the acknowledged message ids kept around. They are handed to
+  // FCM on every login and are persisted between runs, so the list must not grow
+  // without end.
+  private readonly MAX_PERSISTENT_IDS = 100;
 
   private loggedIn = false;
   private streamId = 0;
@@ -206,7 +210,12 @@ export class PushClient extends TypedEmitter<PushClientEvents> {
     switch (message.tag) {
       case MessageTag.DataMessageStanza:
         rootPushLogger.debug(`Push client - DataMessageStanza`, { message: JSON.stringify(message) });
-        if (message.object && message.object.persistentId) this.persistentIds.push(message.object.persistentId);
+        if (message.object && message.object.persistentId) {
+          this.persistentIds.push(message.object.persistentId);
+          if (this.persistentIds.length > this.MAX_PERSISTENT_IDS) {
+            this.persistentIds.splice(0, this.persistentIds.length - this.MAX_PERSISTENT_IDS);
+          }
+        }
 
         this.emit("message", this.convertPayloadMessage(message));
         break;
@@ -224,7 +233,11 @@ export class PushClient extends TypedEmitter<PushClientEvents> {
           message: JSON.stringify(message),
         });
         this.loggedIn = true;
-        this.persistentIds = [];
+        // Clear IN PLACE: the array is shared with PushService, which persists it
+        // between runs. Rebinding here would leave the service holding the stale
+        // list forever, so every newly received id would be lost on restart and
+        // FCM would deliver those messages again.
+        this.persistentIds.length = 0;
 
         this.emit("connect");
 
